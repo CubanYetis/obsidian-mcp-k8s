@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - obsidian-web-mcp/**
+      - .github/workflows/build.yaml
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/cubanyetis/obsidian-mcp-k8s
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # GITHUB_TOKEN pushes to GHCR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3      # arm64 on the amd64 runner
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: obsidian-web-mcp
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # The Dockerfile's org.opencontainers.image.source label links the
+          # package to this repo automatically.
+          # main -> :latest, develop -> :dev; both also tagged <branch>-<sha>.
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name == 'main' && 'latest' || 'dev' }}
+            ${{ env.IMAGE }}:${{ github.ref_name }}-${{ github.sha }}

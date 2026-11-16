@@ -1,0 +1,33 @@
+# Run with:
+#   DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
+#     skaffold run --check-cluster-node-platforms=false
+# (the flag disables cluster-platform pinning, which would route the build
+# through `docker buildx` — no docker CLI on this machine, podman only)
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: obsidian-mcp
+
+build:
+  # sha256 works with or without git history; kept from the pre-repo days.
+  tagPolicy:
+    sha256: {}
+  local:
+    # build via the Docker API (podman socket), not `docker buildx`: skaffold
+    # pins the platform to the remote cluster's and would otherwise exec the
+    # docker CLI, which doesn't exist on this machine.
+    useBuildkit: false
+    useDockerCLI: false
+  artifacts:
+    # The other two images are pulled as-is:
+    #   ghcr.io/crosbyh/obsidian-headless-sync-docker:latest
+    #   cloudflare/cloudflared:latest
+    - image: ghcr.io/cubanyetis/obsidian-mcp-k8s   # GHCR requires lowercase
+      context: obsidian-web-mcp
+
+manifests:
+  kustomize:
+    paths: ["."]
+
+deploy:
+  kubectl: {}

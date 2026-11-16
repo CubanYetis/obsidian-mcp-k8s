@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obsidian-mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # never two syncers on one vault (and RWO volumes can't move between pods)
+  selector:
+    matchLabels: {app: obsidian-mcp}
+  template:
+    metadata:
+      labels: {app: obsidian-mcp}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000   # both vault-mounted containers read/write as group 1000
+      containers:
+        - name: sync
+          image: ghcr.io/crosbyh/obsidian-headless-sync-docker:latest
+          env:
+            - name: OBSIDIAN_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: {name: obsidian-mcp, key: OBSIDIAN_AUTH_TOKEN}
+            - name: VAULT_NAME
+              valueFrom:
+                secretKeyRef: {name: obsidian-mcp, key: VAULT_NAME}
+            # Uncomment if the vault has E2E encryption:
+            # - name: VAULT_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef: {name: obsidian-mcp, key: VAULT_PASSWORD}
+          volumeMounts:
+            - {name: vault, mountPath: /vault}
+            - {name: sync-state, mountPath: /data}
+            - {name: run, mountPath: /run}   # entrypoint puts HOME on this tmpfs
+          securityContext:
+            # Root only for the entrypoint's mkdir/chown, then su-exec drops to
+            # PUID:PGID (default 1000:1000) for the life of `ob sync`.
+            # TODO: go fully rootless by bypassing the entrypoint (command override
+            # running `ob` directly as uid 1000; works because fsGroup makes the
+            # chown unnecessary — costs a reimplementation of first-run sync-setup).
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE, FOWNER, KILL]
+        - name: web-mcp
+          image: ghcr.io/cubanyetis/obsidian-mcp-k8s   # built by skaffold from ./obsidian-web-mcp
+          env:
+            - {name: VAULT_PATH, value: /vault}
+            # VAULT_MCP_HOST/PORT stay at defaults (127.0.0.1:8420): cloudflared
+            # reaches the server over pod loopback; nothing else should.
+            - name: VAULT_MCP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: obsidian-mcp, key: VAULT_MCP_TOKEN}
+            - name: VAULT_OAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: obsidian-mcp, key: VAULT_OAUTH_PASSWORD}
+          volumeMounts:
+            - {name: vault, mountPath: /vault}
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args: [tunnel, --no-autoupdate, run]
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef: {name: obsidian-mcp, key: TUNNEL_TOKEN}
+          securityContext:
+            runAsNonRoot: true
+      volumes:
+        - name: vault
+          persistentVolumeClaim: {claimName: vault}
+        - name: sync-state
+          persistentVolumeClaim: {claimName: sync-state}
+        - name: run
+          emptyDir: {}
